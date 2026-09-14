@@ -191,7 +191,9 @@ class TurnstileSolverService {
 })()
         ''');
 
-        if (result == null) continue;
+        if (result == null) {
+          return;
+        }
 
         final data = result is Map ? result : jsonDecode(result.toString());
 
