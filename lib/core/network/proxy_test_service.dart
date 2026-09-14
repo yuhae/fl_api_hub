@@ -150,6 +150,7 @@ class ProxyTestService {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
+      case DioExceptionType.transformTimeout:
         return ProxyTestFailure(
           '连接超时 (${elapsed.inSeconds}s)${proxyLabel != null ? ' — 代理: $proxyLabel' : ''}',
           e,
