@@ -36,24 +36,42 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --debug
+      - name: Create temporary release signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore android/app/ci-release.jks \
+            -storepass android \
+            -keypass android \
+            -alias ci-release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Fl API Hub CI, OU=Release, O=Fl API Hub, L=Unknown, ST=Unknown, C=US"
+          cat > android/key.properties <<'EOF'
+          storePassword=android
+          keyPassword=android
+          keyAlias=ci-release
+          storeFile=ci-release.jks
+          EOF
 
-      - name: Rename APK
-        run: cp build/app/outputs/flutter-apk/app-debug.apk fl-api-hub-${{ github.sha }}.apk
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Rename release APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk fl-api-hub-${{ github.sha }}-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: fl-api-hub-apk
-          path: fl-api-hub-${{ github.sha }}.apk
+          path: fl-api-hub-${{ github.sha }}-release.apk
           if-no-files-found: error
 
       - name: Publish APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: fl-api-hub-${{ github.sha }}.apk
+          files: fl-api-hub-${{ github.sha }}-release.apk
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
