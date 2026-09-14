@@ -26,7 +26,7 @@ import '../dto/token_dto.dart';
 import '../dto/user_info_dto.dart';
 import '../site_adapter.dart';
 import '../site_type.dart';
-import '../../turnstile/turnstile_solver.dart';
+import '../../browser/turnstile_solver_service.dart';
 
 /// Concrete [SiteAdapter] for common/new-api compatible backends.
 ///
@@ -72,7 +72,6 @@ class CommonApiAdapter implements SiteAdapter {
   @override
   Future<Result<CheckInResultDto>> checkIn(ApiRequest request) async {
     try {
-      // First attempt: normal check-in without Turnstile token
       final response = await dioClient
           .getDio(proxy: request.proxy)
           .request(
@@ -90,7 +89,7 @@ class CommonApiAdapter implements SiteAdapter {
         response.data as Map<String, dynamic>,
       );
 
-      // Check if Turnstile token is required
+      // Check if Turnstile verification is required
       if (!dto.success && _isTurnstileRequired(dto.message)) {
         // Attempt to solve Turnstile and retry
         return await _checkInWithTurnstile(request);
@@ -110,54 +109,39 @@ class CommonApiAdapter implements SiteAdapter {
     }
   }
 
-  /// Checks if the message indicates Turnstile token is required.
+  /// Checks if the message indicates Turnstile verification is required.
   bool _isTurnstileRequired(String? message) {
     if (message == null) return false;
     final normalized = message.toLowerCase();
-    return normalized.contains('turnstile') &&
-        (normalized.contains('token') ||
-            normalized.contains('verify') ||
-            normalized.contains('invalid') ||
-            normalized.contains('failed') ||
-            normalized.contains('校验') ||
-            normalized.contains('为空') ||
-            normalized.contains('失败'));
+
+    // Check for Turnstile-related keywords
+    if (!normalized.contains('turnstile')) return false;
+
+    // Check for additional keywords indicating Turnstile error
+    final keywords = ['token', 'verify', 'invalid', 'failed', '校验', '为空', '失败'];
+    return keywords.any((keyword) => normalized.contains(keyword));
   }
 
-  /// Attempts check-in with Turnstile token bypass.
+  /// Attempts to solve Turnstile and retry check-in.
   Future<Result<CheckInResultDto>> _checkInWithTurnstile(
     ApiRequest request,
   ) async {
     try {
-      // Initialize Turnstile solver
-      final solver = TurnstileSolver();
+      // Solve Turnstile using the solver service
+      final solver = TurnstileSolverService();
+      final solveResult = await solver.solve(
+        url: request.baseUrl,
+        checkPath: '${request.baseUrl}/console/personal',
+        timeout: 30,
+      );
 
-      // Check if solver is available
-      if (!await solver.isAvailable()) {
-        return Failure<CheckInResultDto>(
-          NetworkException(
-            message: 'Turnstile token 需要但解决器不可用。请确保 turnstile-bypass skill 已安装。',
-          ),
-        );
-      }
-
-      // Solve Turnstile for the check-in page
-      final checkInUrl = '${request.baseUrl}/console/personal';
-      final solveResult = await solver.solve(url: checkInUrl);
-
-      if (solveResult is Failure<TurnstileResult>) {
-        return Failure<CheckInResultDto>(
-          NetworkException(
-            message: 'Turnstile token 获取失败: ${solveResult.exception.message}',
-          ),
-        );
-      }
-
-      final turnstileResult = (solveResult as Success<TurnstileResult>).data;
-      if (!turnstileResult.success || turnstileResult.token == null) {
-        return Failure<CheckInResultDto>(
-          NetworkException(
-            message: 'Turnstile token 为空或无效',
+      if (!solveResult.ok || solveResult.token == null) {
+        // Return original error with additional context
+        return Success<CheckInResultDto>(
+          CheckInResultDto(
+            success: false,
+            message: 'Turnstile 验证失败: ${solveResult.error ?? "未知错误"}',
+            data: null,
           ),
         );
       }
@@ -166,8 +150,9 @@ class CommonApiAdapter implements SiteAdapter {
       final response = await dioClient
           .getDio(proxy: request.proxy)
           .request(
-            '/api/user/checkin?turnstile=${turnstileResult.token}',
+            '/api/user/checkin',
             data: {},
+            queryParameters: {'turnstile': solveResult.token},
             options: Options(method: 'POST', extra: buildExtra(request)),
           );
 
@@ -176,12 +161,10 @@ class CommonApiAdapter implements SiteAdapter {
       );
 
       return Success<CheckInResultDto>(dto);
-    } on DioException catch (e, st) {
-      return Failure<CheckInResultDto>(mapToAppException(e, st));
     } catch (e, st) {
       return Failure<CheckInResultDto>(
         UnknownException(
-          message: 'Turnstile 处理错误: $e',
+          message: 'Turnstile 重试失败: $e',
           originalError: e,
           stackTrace: st,
         ),
